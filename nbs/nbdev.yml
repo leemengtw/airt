@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "artpy"
+  site-url: "https://leemengtaiwan.github.io/artpy"
+  description: "Art"
+  repo-branch: main
+  repo-url: "https://github.com/leemengtaiwan/artpy"

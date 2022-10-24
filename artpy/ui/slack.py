@@ -459,7 +459,7 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
         oneline_details += f"{k}:{params[k]} "
 
 
-    initial_comment = f"""<@{user_id}>, your artwork is ready :smartart:\n{prompt}\n*{oneline_details}*""".strip()
+    initial_comment = f"""<@{user_id}>, your artwork is ready.\n{prompt}\n*{oneline_details}*""".strip()
     
     np = params.get("negative_prompt", None)
     if np:

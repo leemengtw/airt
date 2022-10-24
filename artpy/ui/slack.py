@@ -362,7 +362,7 @@ def parse_app_mention_outer_event(outer_event: dict) -> dict:
     
     return d
 
-# %% ../../nbs/ui.slack.ipynb 57
+# %% ../../nbs/ui.slack.ipynb 58
 import boto3
 S3_BUCKET_NAME = "hackathon2022-smartart"
 
@@ -376,7 +376,7 @@ def upload_image_to_s3(id, user_id, buffer, env="prd"):
     )
     return f'''s3://{S3_BUCKET_NAME}/{object_key}''' 
 
-# %% ../../nbs/ui.slack.ipynb 58
+# %% ../../nbs/ui.slack.ipynb 59
 import tempfile
 from smartart.slack.utils import get_user_info, get_conversation_info
 
@@ -437,14 +437,14 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     buffer.seek(0) # rewind pointer back to start
     
     
-    id = uuid.uuid4().hex
-    try:
-        # TODO: use `env` arg to control the place to save images
-        image_s3_url = upload_image_to_s3(id, user_id, buffer)
-        logger.info(image_s3_url)
-    except Exception as e:
-        image_s3_url = ''
-        logger.error("Error in upload image to s3", e)
+    # id = uuid.uuid4().hex
+    # try:
+    #     # TODO: use `env` arg to control the place to save images
+    #     image_s3_url = upload_image_to_s3(id, user_id, buffer)
+    #     logger.info(image_s3_url)
+    # except Exception as e:
+    #     image_s3_url = ''
+    #     logger.error("Error in upload image to s3", e)
     
 #     blocks = build_blocks(user_id, params, image_s3_url)
         

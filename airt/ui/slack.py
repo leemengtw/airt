@@ -387,7 +387,7 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     logger.info(pformat(outer_event))
 
     params = parse_app_mention_outer_event(outer_event)
-    logger.info(pformat(params))
+    logger.info(f"raw params: {pformat(params)}")
     
     event = outer_event['event']
     text = event['text']
@@ -411,6 +411,9 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     params['steps'] = params.get("steps", 50)
     params['cfg'] = params.get('cfg', 7.5)
     params['guidance_scale'] = params['cfg']
+    params['aspect_ratio'] = params.get('aspect', 1)
+
+    logger.info(f"final params: {pformat(params)}")
     
     
     short_prompt = (prompt[:50] + '..') if len(prompt) > 50 else prompt

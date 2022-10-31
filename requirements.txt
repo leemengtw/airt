@@ -1,7 +1,7 @@
 torch==1.12.1
 transformers==4.23.0
 diffusers==0.4.1
-fastcore==1.5.27
 
+fastcore==1.5.27
 fastapi==0.85.0
 pyngrok==5.1.0

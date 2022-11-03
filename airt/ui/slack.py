@@ -2,9 +2,9 @@
 
 # %% auto 0
 __all__ = ['logger', 'NS', 'NP', 'P', 'GATHERING_PROMPT', 'STOP_PARSING', 'INTERMEDIATE_KEYS', 'S3_BUCKET_NAME', 'get_key_val',
-           'parse_raw_text', 'parse_rich_text_section', 'parse_rich_text_quote', 'parse_rich_text_list',
-           'parse_rich_text', 'get_image_from_file', 'build_blocks', 'parse_app_mention_outer_event',
-           'upload_image_to_s3', 'handle_app_mention_event']
+           'parse_raw_text', 'parse_rich_text_section', 'parse_rich_text_quote', 'parse_rich_text_preformatted',
+           'parse_rich_text_list', 'parse_rich_text', 'get_image_from_file', 'build_blocks',
+           'parse_app_mention_outer_event', 'upload_image_to_s3', 'handle_app_mention_event']
 
 # %% ../../nbs/ui.slack.ipynb 3
 import re
@@ -89,7 +89,7 @@ INTERMEDIATE_KEYS = [GATHERING_PROMPT, STOP_PARSING, NS]
 # @pysnooper.snoop()
 def parse_rich_text_section(element: dict, bot_user_id: str=None, kv_sep=":", is_bullet=False) -> dict:
     
-    if not element['type'] in ['rich_text_section', 'rich_text_quote']:
+    if not element['type'] in ['rich_text_section', 'rich_text_quote', 'rich_text_preformatted']:
         raise NotImplementedError(pformat(element))
     
     if not bot_user_id and not is_bullet:
@@ -164,6 +164,10 @@ def parse_rich_text_quote(element: dict, bot_user_id: str=None, kv_sep=":", is_b
     return parse_rich_text_section(element, bot_user_id=bot_user_id, is_bullet=is_bullet)
 
 # %% ../../nbs/ui.slack.ipynb 25
+def parse_rich_text_preformatted(element: dict, bot_user_id: str=None, kv_sep=":", is_bullet=False) -> dict:
+    return parse_rich_text_section(element, bot_user_id=bot_user_id, is_bullet=is_bullet)
+
+# %% ../../nbs/ui.slack.ipynb 27
 # @pysnooper.snoop()
 def parse_rich_text_list(element: dict) -> dict:
     if not (element['type'] == 'rich_text_list' and element['style'] == "bullet"):
@@ -177,7 +181,7 @@ def parse_rich_text_list(element: dict) -> dict:
     
     return d
 
-# %% ../../nbs/ui.slack.ipynb 30
+# %% ../../nbs/ui.slack.ipynb 32
 # @pysnooper.snoop()
 def parse_rich_text(element: dict, bot_user_id: str=None) -> dict:
     if not element['type'] == 'rich_text':
@@ -191,6 +195,8 @@ def parse_rich_text(element: dict, bot_user_id: str=None) -> dict:
             dd = parse_rich_text_section(e, bot_user_id=bot_user_id)
         elif etype == "rich_text_quote":
             dd = parse_rich_text_quote(e, bot_user_id=bot_user_id)
+        elif etype == "rich_text_preformatted":
+            dd = parse_rich_text_preformatted(e, bot_user_id=bot_user_id)
         elif etype == 'rich_text_list':
             dd = parse_rich_text_list(e)
         else:
@@ -221,12 +227,12 @@ def parse_rich_text(element: dict, bot_user_id: str=None) -> dict:
     
     
 
-# %% ../../nbs/ui.slack.ipynb 39
-def get_image_from_file(file: dict, token: str):
+# %% ../../nbs/ui.slack.ipynb 41
+def get_image_from_file(file: dict, token: str) -> PIL.Image.Image:
     # https://stackoverflow.com/a/39849014
     # https://stackoverflow.com/a/36221533
     ftype = file['filetype']
-    if ftype != 'png':
+    if ftype not in ['jpg', 'png']:
         raise NotImplementedError(ftype)
     
     url = file['url_private']
@@ -234,12 +240,18 @@ def get_image_from_file(file: dict, token: str):
     if resp.status_code == 200:
         content = resp.content
         image = Image.open(io.BytesIO(content))
+        
+        try:
+            image = image.convert("PNG")
+        except ValueError:
+            image = image.convert("RGB")
+        
     else:
         logging.info(resp.status_code)
     
     return image
 
-# %% ../../nbs/ui.slack.ipynb 42
+# %% ../../nbs/ui.slack.ipynb 44
 def build_blocks(user_id: str, model_params: str, image_url: str) -> list:
     p = model_params
     logger.info(f"model_params: {pformat(p)}")
@@ -309,7 +321,7 @@ def build_blocks(user_id: str, model_params: str, image_url: str) -> list:
     return blocks
     
 
-# %% ../../nbs/ui.slack.ipynb 45
+# %% ../../nbs/ui.slack.ipynb 47
 # @pysnooper.snoop()
 def parse_app_mention_outer_event(outer_event: dict) -> dict:
     auth_info = outer_event['authorizations'][0]
@@ -357,8 +369,19 @@ def parse_app_mention_outer_event(outer_event: dict) -> dict:
         
         file = files[0]
         token = os.environ['SLACK_BOT_TOKEN']
-        image: PIL.PngImagePlugin.PngImageFile = get_image_from_file(file, token=token)
-        d['init_image'] = image                 
+        image: PIL.Image.Image = get_image_from_file(file, token=token)
+        
+        def pil_to_b64(im: PIL.Image.Image, format="PNG") -> str:
+            buffered = io.BytesIO()
+            im.save(buffered, format=format)
+            im_str = base64.b64encode(buffered.getvalue())
+            return im_str.decode()
+        
+        image_b64 = pil_to_b64(image)
+        
+        d['init_image'] = image_b64
+        
+        
     
     return d
 
@@ -387,7 +410,16 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     logger.info(pformat(outer_event))
 
     params = parse_app_mention_outer_event(outer_event)
-    logger.info(f"raw params: {pformat(params)}")
+    
+    if 'init_image' in params:
+        logger.info('init_image available, img2img')
+        params['mode'] = 'image2image'
+        log_params = {k: v for k, v in params.items() if k != 'init_image'}
+        logger.info(f"raw params: {pformat(log_params)}")
+        
+    else:
+        params['mode'] = 'text2image'
+        logger.info(f"raw params: {pformat(params)}")
     
     event = outer_event['event']
     text = event['text']
@@ -408,12 +440,19 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     
     
     prompt = params['prompt']
-    params['steps'] = params.get("steps", 50)
     params['cfg'] = params.get('cfg', 7.5)
     params['guidance_scale'] = params['cfg']
     params['aspect_ratio'] = params.get('aspect', 1)
-
-    logger.info(f"final params: {pformat(params)}")
+    
+    if 'init_image' in params:
+        params['steps'] = params.get("steps", 50)
+        params['strength'] = params.get('strength', 0.8)
+        
+        log_params = {k: v for k, v in params.items() if k != 'init_image'}
+        logger.info(f"final params: {pformat(log_params)}")
+    else:
+        params['steps'] = params.get("steps", 30)
+        logger.info(f"final params: {pformat(params)}")
     
     
     short_prompt = (prompt[:50] + '..') if len(prompt) > 50 else prompt
@@ -455,10 +494,13 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
 #         channel=channel, 
 #         blocks=blocks
 #     )
-
+    
+    display_params = ['steps', 'cfg', 'seed']
+    if params['mode'] == 'image2image':
+        display_params.append('strength')
 
     oneline_details = ""
-    for k in ['steps', 'cfg', 'seed']:
+    for k in display_params:
         oneline_details += f"{k}:{params[k]} "
 
 

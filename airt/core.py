@@ -4,7 +4,7 @@
 __all__ = ['HF_SD_MODEL', 'HF_CLIP_MODEL', 'VAE_ENCODE_SCALE', 'VAE_DECODE_SCALE', 'lms_scheduler', 'euler_a_scheduler',
            'SCHEDULERS', 'DEFAULT_SCHEDULER', 'vae', 'tokenizer', 'text_encoder', 'unet', 'scheduler', 'generator',
            'i2i_pipe', 'pil_to_latents', 'latents_to_pil', 'generate_image_grid', 'get_image_size_from_aspect_ratio',
-           'pil_to_b64', 'b64_to_pil', 'get_pipe_params_from_airt_req', 'Config', 'AIrtRequest', 'AIrtResponse',
+           'pil_to_b64', 'b64_to_pil', 'Config', 'AIrtRequest', 'AIrtResponse', 'get_pipe_params_from_airt_req',
            'text2image', 'image2image', 'handle_airt_request']
 
 # %% ../nbs/core.ipynb 4
@@ -196,16 +196,7 @@ def b64_to_pil(b64: str, format="PNG") -> PIL.Image.Image:
     
     return im
 
-# %% ../nbs/core.ipynb 41
-def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipeline) -> dict:
-    pipe_accepted_param_keys = inspect.signature(pipe).parameters.keys()
-    pipe_params = {
-        k: v for k, v in req.__dict__.items()
-        if k in pipe_accepted_param_keys
-    }
-    return pipe_params
-
-# %% ../nbs/core.ipynb 44
+# %% ../nbs/core.ipynb 42
 class Config:
     arbitrary_types_allowed = True
 
@@ -226,7 +217,7 @@ class AIrtRequest:
     strength: float = 0.8
     
     # custom parameters
-    mode: str = "text2image"
+    mode: str = None
     cmd: str = None
     steps: int = 0
     cfg: float = None
@@ -276,11 +267,16 @@ class AIrtRequest:
             self.height = height    
             
         # init_image for i2i
+        if self.init_image:
+            self.mode = "image2image"
+        else:
+            self.mode = "text2image"
+            
         if isinstance(self.init_image, str):
             self.init_image = b64_to_pil(self.init_image)
         
 
-# %% ../nbs/core.ipynb 47
+# %% ../nbs/core.ipynb 44
 @pydantic.dataclasses.dataclass
 class AIrtResponse:
     images: List[str]
@@ -289,7 +285,16 @@ class AIrtResponse:
     def keys(self) -> dict:
         return self.__dict__.keys()
 
-# %% ../nbs/core.ipynb 50
+# %% ../nbs/core.ipynb 46
+def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipeline) -> dict:
+    pipe_accepted_param_keys = inspect.signature(pipe).parameters.keys()
+    pipe_params = {
+        k: v for k, v in req.__dict__.items()
+        if k in pipe_accepted_param_keys
+    }
+    return pipe_params
+
+# %% ../nbs/core.ipynb 49
 async def text2image(
     req: AIrtRequest, 
     return_pipe_out=False, 
@@ -323,7 +328,7 @@ async def text2image(
         )
 
 
-# %% ../nbs/core.ipynb 55
+# %% ../nbs/core.ipynb 54
 async def image2image(
     req: AIrtRequest, 
     return_pipe_out=False,

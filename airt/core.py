@@ -214,7 +214,7 @@ class AIrtRequest:
         
     # inherif from `StableDiffusionImg2ImgPipeline`
     init_image: Union[torch.FloatTensor, PIL.Image.Image, str] = None # support b64
-    strength: float = 0.8
+    strength: float = 0.6
     
     # custom parameters
     mode: str = None

@@ -443,15 +443,14 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     params['cfg'] = params.get('cfg', 7.5)
     params['guidance_scale'] = params['cfg']
     params['aspect_ratio'] = params.get('aspect', 1)
+    params['steps'] = params.get("steps", 30)
     
     if 'init_image' in params:
-        params['steps'] = params.get("steps", 50)
-        params['strength'] = params.get('strength', 0.8)
+        params['strength'] = params.get('strength', 0.6)
         
         log_params = {k: v for k, v in params.items() if k != 'init_image'}
         logger.info(f"final params: {pformat(log_params)}")
     else:
-        params['steps'] = params.get("steps", 30)
         logger.info(f"final params: {pformat(params)}")
     
     

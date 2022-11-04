@@ -3,9 +3,9 @@
 # %% auto 0
 __all__ = ['HF_SD_MODEL', 'HF_CLIP_MODEL', 'VAE_ENCODE_SCALE', 'VAE_DECODE_SCALE', 'lms_scheduler', 'euler_a_scheduler',
            'SCHEDULERS', 'DEFAULT_SCHEDULER', 'vae', 'tokenizer', 'text_encoder', 'unet', 'scheduler', 'generator',
-           'i2i_pipe', 'pil_to_latents', 'latents_to_pil', 'generate_image_grid', 'get_image_size_from_aspect_ratio',
-           'pil_to_b64', 'b64_to_pil', 'Config', 'AIrtRequest', 'AIrtResponse', 'get_pipe_params_from_airt_req',
-           'text2image', 'image2image', 'handle_airt_request']
+           'i2i_pipe', 'pil_to_latents', 'latents_to_pils', 'generate_image_grid', 'get_image_size_from_aspect_ratio',
+           'pil_to_b64', 'b64_to_pil', 'convert_gif_to_mp4', 'latents_to_animation', 'Config', 'AIrtRequest',
+           'AIrtResponse', 'get_pipe_params_from_airt_req', 'text2image', 'image2image', 'handle_airt_request']
 
 # %% ../nbs/core.ipynb 4
 import torch
@@ -26,6 +26,7 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
 )
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipeline
 
+import os
 import io
 import inspect
 import requests
@@ -37,6 +38,7 @@ import numpy as np
 import base64
 from typing import List, Union, Tuple, Dict, Any
 from pprint import pprint
+import tempfile
 
 # serving
 import pydantic
@@ -123,28 +125,49 @@ def pil_to_latents(im: PIL.Image.Image) -> torch.Tensor:
     tensor = tensor * 2 - 1
     with torch.autocast(device):
         latent = vae.encode(tensor) 
+    torch.cuda.empty_cache()
+    
     return VAE_ENCODE_SCALE * latent.latent_dist.sample()
 
 # %% ../nbs/core.ipynb 27
 @torch.no_grad()
-def latents_to_pil(latents: torch.Tensor) -> List[PIL.Image.Image]:
+def latents_to_pils(
+    latents: Union[torch.Tensor, List[torch.Tensor]], 
+    batch_size=4
+) -> List[PIL.Image.Image]:
     """
     Transform batch of latent back to list of pil images
-    - `latents`: shape(batch_size, channels, heights, width)
+    - latents: shape(#latents, channels, heights, width)
     """
     
     device = vae.device.type
-
-    latents = latents.to(device)
-    latents = VAE_DECODE_SCALE * latents
-    
-    with torch.autocast(device):
-        ims = vae.decode(latents).sample
+    if type(latents) is list:
+        latents = torch.concat(latents)
         
-    ims = (ims / 2 + 0.5).clamp(0, 1)
-    ims = ims.detach().cpu().permute(0, 2, 3, 1).numpy()
-    ims = (ims * 255).round().astype("uint8")
-    pil_ims = [PIL.Image.fromarray(im) for im in ims]
+    shape = latents.shape
+    assert len(shape) == 4  # (b, c, h, w)
+    
+    n = latents.shape[0]
+    print(f"generating {n} pil images from latents.")
+    num_chunks = int(np.ceil(n / batch_size))
+    chunks: Tuple[torch.Tensor] = torch.chunk(latents, num_chunks)
+    
+    pil_ims = []
+    
+    for latents in tqdm(chunks):
+        latents = latents.to(device)  # (b, c, h, w)
+        latents = VAE_DECODE_SCALE * latents
+    
+        with torch.autocast(device):
+            ims = vae.decode(latents).sample
+        
+        ims = (ims / 2 + 0.5).clamp(0, 1)
+        ims = ims.detach().cpu().permute(0, 2, 3, 1).numpy()
+        ims = (ims * 255).round().astype("uint8")
+        
+        torch.cuda.empty_cache()
+        pil_ims.extend([PIL.Image.fromarray(im) for im in ims])
+    
     return pil_ims
 
 # %% ../nbs/core.ipynb 30
@@ -197,9 +220,57 @@ def b64_to_pil(b64: str, format="PNG") -> PIL.Image.Image:
     return im
 
 # %% ../nbs/core.ipynb 41
-# def all_latents_to_animation(all_latents: )
+def convert_gif_to_mp4(gif_path: str, crf=25, mp4_dir="mp4") -> str:
+    mp4_dir = os.path.join(os.path.dirname(gif_path), mp4_dir)
+    gif_file = gif_path.split(os.path.sep)[-1]
+    
+    if not os.path.exists(mp4_dir):
+        os.makedirs(mp4_dir)
+        
+    mp4_path = os.path.join(mp4_dir, gif_file.replace(".gif", ".mp4"))
+    cmd = """
+    ffmpeg -y -i {} -movflags faststart -pix_fmt yuv420p -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" 
+    -crf {} -r 24 {}
+    """
+    os.system(cmd.format(gif_path, crf, mp4_path))
+    return mp4_path
 
-# %% ../nbs/core.ipynb 44
+# %% ../nbs/core.ipynb 43
+def latents_to_animation(
+    latents: Union[torch.Tensor, List[torch.Tensor]],
+    first_ms=1000,
+    intermediate_ms=500,
+    final_ms=2000,
+    animation_fname="latent_animation",
+) -> str:
+    """
+    Generate an animation file from give `latents` and return the path of the animation file
+    
+    - latents: shape of (#latents, channel, height, width)
+    """
+    ims = latents_to_pils(latents)
+    first_im, rest_ims = ims[0], ims[1:]
+    
+    # save as gif
+    gif_fpath = os.path.join(tempfile.tempdir, f"{animation_fname}.gif")
+    first_im.save(
+        gif_fpath,
+        format="gif",
+        save_all=True,
+        duration=[first_ms] + [intermediate_ms] * (len(ims) - 2) + [final_ms],
+        append_images=rest_ims,
+    )
+    
+    # make infinite loop and optim
+    # https://github.com/kohler/gifsicle
+    os.system(f"""
+    convert -loop 0 {gif_fpath} {gif_fpath} \
+        && gifsicle -O3 --lossy=35 -o {gif_fpath} {gif_fpath}
+    """)
+    
+    return gif_fpath
+
+# %% ../nbs/core.ipynb 48
 class Config:
     arbitrary_types_allowed = True
 
@@ -290,7 +361,7 @@ class AIrtRequest:
             self.aspect_ratio = ar
             self.init_image = im.resize((w, h))  # TODO: find the best resampling method
 
-# %% ../nbs/core.ipynb 46
+# %% ../nbs/core.ipynb 50
 @pydantic.dataclasses.dataclass
 class AIrtResponse:
     images: List[str]
@@ -299,7 +370,7 @@ class AIrtResponse:
     def keys(self) -> dict:
         return self.__dict__.keys()
 
-# %% ../nbs/core.ipynb 48
+# %% ../nbs/core.ipynb 52
 def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipeline) -> dict:
     pipe_accepted_param_keys = inspect.signature(pipe).parameters.keys()
     pipe_params = {
@@ -308,7 +379,7 @@ def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipelin
     }
     return pipe_params
 
-# %% ../nbs/core.ipynb 51
+# %% ../nbs/core.ipynb 55
 async def text2image(
     req: AIrtRequest, 
     return_pipe_out=False, 
@@ -327,6 +398,7 @@ async def text2image(
     
     pipe_params = get_pipe_params_from_airt_req(req, pipe)
     pipe_out = pipe(**pipe_params)
+    torch.cuda.empty_cache()
     
     # set back to default scheduler
     pipe.scheduler = DEFAULT_SCHEDULER
@@ -342,7 +414,7 @@ async def text2image(
         )
 
 
-# %% ../nbs/core.ipynb 56
+# %% ../nbs/core.ipynb 60
 async def image2image(
     req: AIrtRequest, 
     return_pipe_out=False,
@@ -361,6 +433,7 @@ async def image2image(
     
     pipe_params = get_pipe_params_from_airt_req(req, i2i_pipe)
     pipe_out = i2i_pipe(**pipe_params)
+    torch.cuda.empty_cache()
     
     # set back to default scheduler
     pipe.scheduler = DEFAULT_SCHEDULER
@@ -375,7 +448,7 @@ async def image2image(
             seed=seed,
         )    
 
-# %% ../nbs/core.ipynb 62
+# %% ../nbs/core.ipynb 66
 async def handle_airt_request(req: AIrtRequest):
     pprint(req)
     mode = req.mode

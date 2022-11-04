@@ -196,7 +196,10 @@ def b64_to_pil(b64: str, format="PNG") -> PIL.Image.Image:
     
     return im
 
-# %% ../nbs/core.ipynb 42
+# %% ../nbs/core.ipynb 41
+# def all_latents_to_animation(all_latents: )
+
+# %% ../nbs/core.ipynb 44
 class Config:
     arbitrary_types_allowed = True
 
@@ -266,17 +269,28 @@ class AIrtRequest:
             self.width = width
             self.height = height    
             
-        # init_image for i2i
+        # mode
         if self.init_image:
             self.mode = "image2image"
         else:
             self.mode = "text2image"
-            
+        
+        # i2i image handling
         if isinstance(self.init_image, str):
             self.init_image = b64_to_pil(self.init_image)
-        
+            
+        if isinstance(self.init_image, PIL.Image.Image):
+            im = self.init_image
+            w, h = im.size
+            ar = round(w/h, 3)
+            w, h = get_image_size_from_aspect_ratio(ar)
+            
+            self.width = w
+            self.height = h
+            self.aspect_ratio = ar
+            self.init_image = im.resize((w, h))  # TODO: find the best resampling method
 
-# %% ../nbs/core.ipynb 44
+# %% ../nbs/core.ipynb 46
 @pydantic.dataclasses.dataclass
 class AIrtResponse:
     images: List[str]
@@ -285,7 +299,7 @@ class AIrtResponse:
     def keys(self) -> dict:
         return self.__dict__.keys()
 
-# %% ../nbs/core.ipynb 46
+# %% ../nbs/core.ipynb 48
 def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipeline) -> dict:
     pipe_accepted_param_keys = inspect.signature(pipe).parameters.keys()
     pipe_params = {
@@ -294,7 +308,7 @@ def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipelin
     }
     return pipe_params
 
-# %% ../nbs/core.ipynb 49
+# %% ../nbs/core.ipynb 51
 async def text2image(
     req: AIrtRequest, 
     return_pipe_out=False, 
@@ -328,7 +342,7 @@ async def text2image(
         )
 
 
-# %% ../nbs/core.ipynb 54
+# %% ../nbs/core.ipynb 56
 async def image2image(
     req: AIrtRequest, 
     return_pipe_out=False,
@@ -361,7 +375,7 @@ async def image2image(
             seed=seed,
         )    
 
-# %% ../nbs/core.ipynb 60
+# %% ../nbs/core.ipynb 62
 async def handle_airt_request(req: AIrtRequest):
     pprint(req)
     mode = req.mode

@@ -442,6 +442,7 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     prompt = params['prompt']
     params['cfg'] = params.get('cfg', 7.5)
     params['guidance_scale'] = params['cfg']
+    params['animation_type'] = params.get('anim', params.get("animate", ""))
     params['aspect_ratio'] = params.get('aspect', 1)
     params['steps'] = params.get("steps", 30)
     
@@ -463,19 +464,21 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
     )
     j = resp.json()
     logger.info(j.keys())
-    
-    image_data = j['images'][0]
     params['seed'] = j['seed']
     
-    image = Image.open(io.BytesIO(
-        base64.decodebytes(bytes(image_data, "utf-8"))))
-    
-    tempdir = tempfile.gettempdir()
-    file_path = os.path.join(tempdir, f'''{short_prompt}.png''')
-    image.save(file_path)
-    buffer = io.BytesIO()
-    image.save(buffer, "PNG")
-    buffer.seek(0) # rewind pointer back to start
+    if j.get("animation", None):
+        anim_b64 = j['animation']
+        file_path = os.path.join(tempfile.gettempdir(), f"{short_prompt}.gif")
+        with open(file_path, "wb") as f:
+            f.write(base64.b64decode(anim_b64))
+    else:
+        im_b64 = j['images'][0]
+        im = Image.open(io.BytesIO(base64.decodebytes(bytes(im_b64, "utf-8"))))
+        file_path = os.path.join(tempfile.gettempdir(), f"{short_prompt}.png")
+        im.save(file_path)
+        buffer = io.BytesIO()
+        im.save(buffer, "PNG")
+        buffer.seek(0) # rewind pointer back to start
     
     
     # id = uuid.uuid4().hex
@@ -494,9 +497,9 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
 #         blocks=blocks
 #     )
     
-    display_params = ['steps', 'cfg', 'seed']
+    display_params = ['cfg', 'steps', 'seed']
     if params['mode'] == 'image2image':
-        display_params.append('strength')
+        display_params = ['strength'] + display_params
 
     oneline_details = ""
     for k in display_params:

@@ -4,8 +4,9 @@
 __all__ = ['HF_SD_MODEL', 'HF_CLIP_MODEL', 'VAE_ENCODE_SCALE', 'VAE_DECODE_SCALE', 'lms_scheduler', 'euler_a_scheduler',
            'SCHEDULERS', 'DEFAULT_SCHEDULER', 'vae', 'tokenizer', 'text_encoder', 'unet', 'scheduler', 'generator',
            'i2i_pipe', 'pil_to_latents', 'latents_to_pils', 'generate_image_grid', 'get_image_size_from_aspect_ratio',
-           'pil_to_b64', 'b64_to_pil', 'convert_gif_to_mp4', 'latents_to_animation', 'Config', 'AIrtRequest',
-           'AIrtResponse', 'get_pipe_params_from_airt_req', 'text2image', 'image2image', 'handle_airt_request']
+           'pil_to_b64', 'b64_to_pil', 'file_to_b64', 'b64_to_file', 'convert_gif_to_mp4', 'latents_to_animation',
+           'Config', 'AIrtRequest', 'AIrtResponse', 'get_pipe_params_from_airt_req', 'text2image', 'image2image',
+           'handle_airt_request']
 
 # %% ../nbs/core.ipynb 4
 import torch
@@ -220,6 +221,16 @@ def b64_to_pil(b64: str, format="PNG") -> PIL.Image.Image:
     return im
 
 # %% ../nbs/core.ipynb 41
+def file_to_b64(file_path: str) -> str:
+    with open(file_path, "rb") as f:
+        return base64.b64encode(f.read())
+
+# %% ../nbs/core.ipynb 43
+def b64_to_file(b64, output_path):
+    with open(output_path, "wb") as f:
+        f.write(base64.b64decode(b64))
+
+# %% ../nbs/core.ipynb 45
 def convert_gif_to_mp4(gif_path: str, crf=25, mp4_dir="mp4") -> str:
     mp4_dir = os.path.join(os.path.dirname(gif_path), mp4_dir)
     gif_file = gif_path.split(os.path.sep)[-1]
@@ -235,12 +246,11 @@ def convert_gif_to_mp4(gif_path: str, crf=25, mp4_dir="mp4") -> str:
     os.system(cmd.format(gif_path, crf, mp4_path))
     return mp4_path
 
-# %% ../nbs/core.ipynb 43
+# %% ../nbs/core.ipynb 47
 def latents_to_animation(
     latents: Union[torch.Tensor, List[torch.Tensor]],
-    first_ms=1000,
-    intermediate_ms=500,
-    final_ms=2000,
+    frame_idx_to_ms: dict = None,
+    ms_per_frame: int = 300,
     animation_fname="latent_animation",
 ) -> str:
     """
@@ -250,6 +260,10 @@ def latents_to_animation(
     """
     ims = latents_to_pils(latents)
     first_im, rest_ims = ims[0], ims[1:]
+    n = len(ims)
+    durations = [ms_per_frame] * n
+    for frame_idx, ms in frame_idx_to_ms.items():
+        durations[frame_idx] = ms
     
     # save as gif
     gif_fpath = os.path.join(tempfile.tempdir, f"{animation_fname}.gif")
@@ -257,7 +271,7 @@ def latents_to_animation(
         gif_fpath,
         format="gif",
         save_all=True,
-        duration=[first_ms] + [intermediate_ms] * (len(ims) - 2) + [final_ms],
+        duration=durations,
         append_images=rest_ims,
     )
     
@@ -270,7 +284,7 @@ def latents_to_animation(
     
     return gif_fpath
 
-# %% ../nbs/core.ipynb 48
+# %% ../nbs/core.ipynb 53
 class Config:
     arbitrary_types_allowed = True
 
@@ -293,6 +307,7 @@ class AIrtRequest:
     # custom parameters
     mode: str = None
     cmd: str = None
+    animation_type: str = ""
     steps: int = 0
     cfg: float = None
     batch_size: int = None
@@ -316,6 +331,19 @@ class AIrtRequest:
         if v and not v in SCHEDULERS:
             raise ValueError(f"{v} is not a valid key in {SCHEDULERS.keys()}")
         return v.lower().strip()
+    
+    @pydantic.validator('animation_type')
+    def animate_types_should_be_defined(cls, v):
+        v = v.lower().strip().replace("-", "_")
+        
+        supported_animation_types =[
+            "progress",
+            "predict_x0"
+        ]
+        
+        if v and not v in supported_animation_types:
+            raise ValueError(f"{v} is not supported. Supported animation types: {supported_animation_types}")
+        return v
     
     
     # https://pydantic-docs.helpmanual.io/usage/dataclasses/#initialize-hooks
@@ -360,17 +388,20 @@ class AIrtRequest:
             self.height = h
             self.aspect_ratio = ar
             self.init_image = im.resize((w, h))  # TODO: find the best resampling method
+            
 
-# %% ../nbs/core.ipynb 50
+# %% ../nbs/core.ipynb 56
 @pydantic.dataclasses.dataclass
 class AIrtResponse:
-    images: List[str]
-    seed: int = None
+    seed: int
+    images: List[str] = None
+    animation: str = None
+
         
     def keys(self) -> dict:
         return self.__dict__.keys()
 
-# %% ../nbs/core.ipynb 52
+# %% ../nbs/core.ipynb 58
 def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipeline) -> dict:
     pipe_accepted_param_keys = inspect.signature(pipe).parameters.keys()
     pipe_params = {
@@ -379,7 +410,7 @@ def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipelin
     }
     return pipe_params
 
-# %% ../nbs/core.ipynb 55
+# %% ../nbs/core.ipynb 61
 async def text2image(
     req: AIrtRequest, 
     return_pipe_out=False, 
@@ -403,18 +434,37 @@ async def text2image(
     # set back to default scheduler
     pipe.scheduler = DEFAULT_SCHEDULER
         
-    b64images = [pil_to_b64(im) for im in pipe_out.images]
+    anim_b64 = None
+    if req.animation_type:
+        if req.animation_type == "progress":
+            anim_path = latents_to_animation(
+                pipe_out.all_latents,
+                frame_idx_to_ms={-1: 2000},
+                ms_per_frame=150,
+            )
+        elif req.animation_type == "predict-x0":
+            anim_path = latents_to_animation(
+                pipe_out.all_latents_x0,
+                frame_idx_to_ms={-1: 2000},
+                ms_per_frame=150,
+            )
+        else:
+            raise NotImplementedError
+            
+        anim_b64 = file_to_b64(anim_path)
+
+    ims_b64 = [pil_to_b64(im) for im in pipe_out.images]
     
     if return_pipe_out:
         return pipe_out
     else:
         return AIrtResponse(
-            images=b64images,
+            images=ims_b64,
             seed=seed,
-        )
+            animation=anim_b64,
+        )    
 
-
-# %% ../nbs/core.ipynb 60
+# %% ../nbs/core.ipynb 68
 async def image2image(
     req: AIrtRequest, 
     return_pipe_out=False,
@@ -437,18 +487,37 @@ async def image2image(
     
     # set back to default scheduler
     pipe.scheduler = DEFAULT_SCHEDULER
+    
+    anim_b64 = None
+    if req.animation_type:
+        if req.animation_type == "progress":
+            anim_path = latents_to_animation(
+                [pipe_out.init_scaled_latents] + pipe_out.all_latents_x0,
+                frame_idx_to_ms={0: 2000, 1: 2000, -1: 2000}
+            )
+        elif req.animation_type == "predict_x0":
+            anim_path = latents_to_animation(
+                [pipe_out.init_scaled_latents] + pipe_out.all_latents_x0,
+                frame_idx_to_ms={0: 2000, 1: 2000, -1: 2000}
+            )
+        else:
+            raise NotImplementedError
         
-    b64images = [pil_to_b64(im) for im in pipe_out.images]
+        anim_b64 = file_to_b64(anim_path)
+
+    ims_b64 = [pil_to_b64(im) for im in pipe_out.images]
     
     if return_pipe_out:
+        pipe_out.animation = anim_b64
         return pipe_out
     else:
         return AIrtResponse(
-            images=b64images,
+            images=ims_b64,
             seed=seed,
+            animation=anim_b64,
         )    
 
-# %% ../nbs/core.ipynb 66
+# %% ../nbs/core.ipynb 81
 async def handle_airt_request(req: AIrtRequest):
     pprint(req)
     mode = req.mode

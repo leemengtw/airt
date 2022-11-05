@@ -492,7 +492,7 @@ async def image2image(
     if req.animation_type:
         if req.animation_type == "progress":
             anim_path = latents_to_animation(
-                [pipe_out.init_scaled_latents] + pipe_out.all_latents_x0,
+                [pipe_out.init_scaled_latents] + pipe_out.all_latents,
                 frame_idx_to_ms={0: 2000, 1: 2000, -1: 2000}
             )
         elif req.animation_type == "predict_x0":

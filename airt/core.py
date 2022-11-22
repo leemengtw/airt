@@ -2,7 +2,7 @@
 
 # %% auto 0
 __all__ = ['HF_SD_MODEL', 'HF_CLIP_MODEL', 'VAE_ENCODE_SCALE', 'VAE_DECODE_SCALE', 'lms_scheduler', 'euler_a_scheduler',
-           'SCHEDULERS', 'DEFAULT_SCHEDULER', 'vae', 'tokenizer', 'text_encoder', 'unet', 'scheduler', 'generator',
+           'pndm_scheduler', 'SCHEDULERS', 'vae', 'tokenizer', 'text_encoder', 'unet', 'scheduler', 'generator',
            'i2i_pipe', 'pil_to_latents', 'latents_to_pils', 'generate_image_grid', 'get_image_size_from_aspect_ratio',
            'pil_to_b64', 'b64_to_pil', 'file_to_b64', 'b64_to_file', 'convert_gif_to_mp4', 'latents_to_animation',
            'Config', 'AIrtRequest', 'AIrtResponse', 'get_pipe_params_from_airt_req', 'text2image', 'image2image',
@@ -19,13 +19,17 @@ from transformers import logging
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.schedulers import (
     EulerAncestralDiscreteScheduler, 
-    LMSDiscreteScheduler
+    LMSDiscreteScheduler,
+    DPMSolverMultistepScheduler
 )
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
+
+from diffusers import AltDiffusionPipeline
+
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_v0 import (
     StableDiffusionPipelineOutput, 
     StableDiffusionPipeline,
 )
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipeline
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img_v0 import StableDiffusionImg2ImgPipeline
 
 import os
 import io
@@ -56,7 +60,8 @@ else:
   
 
 # %% ../nbs/core.ipynb 6
-HF_SD_MODEL = "runwayml/stable-diffusion-v1-5"
+HF_SD_MODEL = "BAAI/AltDiffusion-m9"
+# HF_SD_MODEL = "runwayml/stable-diffusion-v1-5"
 HF_CLIP_MODEL = "openai/clip-vit-large-patch14"
 
 VAE_ENCODE_SCALE = 0.18215
@@ -77,25 +82,41 @@ euler_a_scheduler = EulerAncestralDiscreteScheduler.from_config(
     HF_SD_MODEL, subfolder="scheduler"
 )
 
+pndm_scheduler = DPMSolverMultistepScheduler(
+    beta_start=0.00085,
+    beta_end=0.012,
+    beta_schedule="scaled_linear",
+    num_train_timesteps=1000,
+)
+
 # %% ../nbs/core.ipynb 12
 SCHEDULERS = {
     "euler_a": euler_a_scheduler,
     "lms": lms_scheduler,
+    "pndm": pndm_scheduler,
 }
 
-DEFAULT_SCHEDULER = euler_a_scheduler
+# %% ../nbs/core.ipynb 13
+if HF_SD_MODEL == "BAAI/AltDiffusion-m9":
+    DEFAULT_PIPE_CLS = AltDiffusionPipeline
+    DEFAULT_SCHEDULER = pndm_scheduler
+    DEFAULT_REVISION = None
+else:
+    DEFAULT_PIPE_CLS = StableDiffusionPipeline
+    DEFAULT_SCHEDULER = euler_a_scheduler
+    DEFAULT_REVISION = "fp16"
 
-# %% ../nbs/core.ipynb 14
+# %% ../nbs/core.ipynb 15
 if device == "mps":
-    pipe = StableDiffusionPipeline.from_pretrained(
+    pipe = DEFAULT_PIPE_CLS.from_pretrained(
         HF_SD_MODEL, 
         scheduler=DEFAULT_SCHEDULER
     )
 else:
-    pipe = StableDiffusionPipeline.from_pretrained(
+    pipe = DEFAULT_PIPE_CLS.from_pretrained(
         HF_SD_MODEL, 
         torch_dtype=torch.float16, 
-        revision="fp16",
+        revision=DEFAULT_REVISION,
         scheduler=DEFAULT_SCHEDULER
     )
 
@@ -104,7 +125,7 @@ pipe.to(device)
 # pipe.enable_xformers_memory_efficient_attention()
 pipe.enable_attention_slicing()
 
-# %% ../nbs/core.ipynb 16
+# %% ../nbs/core.ipynb 17
 vae = pipe.vae
 tokenizer = pipe.tokenizer
 text_encoder = pipe.text_encoder
@@ -112,10 +133,10 @@ unet = pipe.unet
 scheduler = pipe.scheduler
 generator = torch.Generator()
 
-# %% ../nbs/core.ipynb 19
+# %% ../nbs/core.ipynb 20
 i2i_pipe = StableDiffusionImg2ImgPipeline(**pipe.components)
 
-# %% ../nbs/core.ipynb 24
+# %% ../nbs/core.ipynb 25
 @torch.no_grad()
 def pil_to_latents(im: PIL.Image.Image) -> torch.Tensor:
     """
@@ -130,7 +151,7 @@ def pil_to_latents(im: PIL.Image.Image) -> torch.Tensor:
     
     return VAE_ENCODE_SCALE * latent.latent_dist.sample()
 
-# %% ../nbs/core.ipynb 27
+# %% ../nbs/core.ipynb 28
 @torch.no_grad()
 def latents_to_pils(
     latents: Union[torch.Tensor, List[torch.Tensor]], 
@@ -171,7 +192,7 @@ def latents_to_pils(
     
     return pil_ims
 
-# %% ../nbs/core.ipynb 30
+# %% ../nbs/core.ipynb 31
 def generate_image_grid(
     images: List[PIL.Image.Image], 
     nrow: int, 
@@ -183,7 +204,7 @@ def generate_image_grid(
         grid.paste(im, box=(i % ncol * w, i // ncol * h))
     return grid
 
-# %% ../nbs/core.ipynb 33
+# %% ../nbs/core.ipynb 34
 def get_image_size_from_aspect_ratio(aspect_ratio: float) -> Tuple[int, int]:
     base = 512
     width, height = (base, base)
@@ -203,14 +224,14 @@ def get_image_size_from_aspect_ratio(aspect_ratio: float) -> Tuple[int, int]:
     
     return (width, height)
 
-# %% ../nbs/core.ipynb 36
+# %% ../nbs/core.ipynb 37
 def pil_to_b64(im: PIL.Image.Image, format="PNG") -> str:
     buffered = io.BytesIO()
     im.save(buffered, format=format)
     im_str = base64.b64encode(buffered.getvalue())
     return im_str.decode()
 
-# %% ../nbs/core.ipynb 38
+# %% ../nbs/core.ipynb 39
 def b64_to_pil(b64: str, format="PNG") -> PIL.Image.Image:
     im = PIL.Image.open(io.BytesIO(base64.b64decode(b64)))
     try:
@@ -220,17 +241,17 @@ def b64_to_pil(b64: str, format="PNG") -> PIL.Image.Image:
     
     return im
 
-# %% ../nbs/core.ipynb 41
+# %% ../nbs/core.ipynb 42
 def file_to_b64(file_path: str) -> str:
     with open(file_path, "rb") as f:
         return base64.b64encode(f.read())
 
-# %% ../nbs/core.ipynb 43
+# %% ../nbs/core.ipynb 44
 def b64_to_file(b64, output_path):
     with open(output_path, "wb") as f:
         f.write(base64.b64decode(b64))
 
-# %% ../nbs/core.ipynb 45
+# %% ../nbs/core.ipynb 46
 def convert_gif_to_mp4(gif_path: str, crf=25, mp4_dir="mp4") -> str:
     mp4_dir = os.path.join(os.path.dirname(gif_path), mp4_dir)
     gif_file = gif_path.split(os.path.sep)[-1]
@@ -246,7 +267,7 @@ def convert_gif_to_mp4(gif_path: str, crf=25, mp4_dir="mp4") -> str:
     os.system(cmd.format(gif_path, crf, mp4_path))
     return mp4_path
 
-# %% ../nbs/core.ipynb 47
+# %% ../nbs/core.ipynb 48
 def latents_to_animation(
     latents: Union[torch.Tensor, List[torch.Tensor]],
     frame_idx_to_ms: dict = None,
@@ -284,7 +305,7 @@ def latents_to_animation(
     
     return gif_fpath
 
-# %% ../nbs/core.ipynb 53
+# %% ../nbs/core.ipynb 54
 class Config:
     arbitrary_types_allowed = True
 
@@ -390,7 +411,7 @@ class AIrtRequest:
             self.init_image = im.resize((w, h))  # TODO: find the best resampling method
             
 
-# %% ../nbs/core.ipynb 56
+# %% ../nbs/core.ipynb 57
 @pydantic.dataclasses.dataclass
 class AIrtResponse:
     seed: int
@@ -401,7 +422,7 @@ class AIrtResponse:
     def keys(self) -> dict:
         return self.__dict__.keys()
 
-# %% ../nbs/core.ipynb 58
+# %% ../nbs/core.ipynb 59
 def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipeline) -> dict:
     pipe_accepted_param_keys = inspect.signature(pipe).parameters.keys()
     pipe_params = {
@@ -410,7 +431,7 @@ def get_pipe_params_from_airt_req(req: AIrtRequest, pipe: StableDiffusionPipelin
     }
     return pipe_params
 
-# %% ../nbs/core.ipynb 61
+# %% ../nbs/core.ipynb 62
 async def text2image(
     req: AIrtRequest, 
     return_pipe_out=False, 
@@ -464,7 +485,7 @@ async def text2image(
             animation=anim_b64,
         )    
 
-# %% ../nbs/core.ipynb 68
+# %% ../nbs/core.ipynb 69
 async def image2image(
     req: AIrtRequest, 
     return_pipe_out=False,
@@ -517,7 +538,7 @@ async def image2image(
             animation=anim_b64,
         )    
 
-# %% ../nbs/core.ipynb 81
+# %% ../nbs/core.ipynb 82
 async def handle_airt_request(req: AIrtRequest):
     pprint(req)
     mode = req.mode

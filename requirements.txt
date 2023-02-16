@@ -1,7 +1,14 @@
 torch==1.12.1
+torchvision==0.13.1
 transformers==4.23.0
 diffusers==0.4.1
-sentencepiece
+sentencepiece==0.1.97
+
+mediapy==1.1.2
+accelerate==0.13.1
+invisible-watermark==0.1.5
+
+triton-1.1.1
 
 fastcore==1.5.27
 fastapi==0.85.0

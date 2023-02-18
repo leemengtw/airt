@@ -64,7 +64,7 @@ else:
 # HF_SD_MODEL = "BAAI/AltDiffusion-m9"
 # HF_SD_MODEL = "runwayml/stable-diffusion-v1-5"
 # HF_SD_MODEL = "stabilityai/stable-diffusion-2"
-HF_SD_MODEL = "leemeng/anime-test"
+HF_SD_MODEL = "leemeng/anime-65000"
 
 HF_CLIP_MODEL = "openai/clip-vit-large-patch14"
 

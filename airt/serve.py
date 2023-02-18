@@ -15,4 +15,4 @@ route_info = [{
 }]
 
 app = create_app(route_info)
-serve(app, port=8000)
+serve(app, port=8000, public=False)

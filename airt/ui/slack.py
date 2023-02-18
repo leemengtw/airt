@@ -294,6 +294,7 @@ def build_blocks(user_id: str, model_params: str, image_url: str) -> list:
         b_config
     ]
     
+
     if p.get("negative_prompt", None):
         blocks.append({
             "type": "section",
@@ -348,17 +349,7 @@ def parse_app_mention_outer_event(outer_event: dict) -> dict:
             d[NP] = " ".join(d[NS])
             
         d.pop(k, None)
-    
-    # FIXME: overwrite for testing
-#     d["num_images_per_prompt"] = 4
-    np_v = "!NP"
-    if np_v in d["prompt"]:
         
-
-        d[NP] = """低解像度　作画ミス 良くないアナッタミー　悪いアナッタミー 低解像度　悪い解剖　悪い手　テキスト　指がない　余分な指　少ない指　ボケ　突然変異の手と指　下手な顔　突然変異　変形顔　醜い　悪い比率　余分な手足　余分な顔　二頭身　余分な頭　余分な足　モンスター　ロゴ　切り抜き　最悪品質　JPEG　ひょろ長い　長い体　長い首　JPEGアーティファクト　削除　古い　最古　検閲された　悪い美的感覚　モザイク検閲　バー検閲　ブラー検閲　NSFW
-        """.strip()
-        d["prompt"] = d["prompt"].replace(np_v, "")
-    
     orig_d = dict(d)
     for k, v in orig_d.items():
         try:
@@ -518,10 +509,9 @@ def handle_app_mention_event(body, client, logger, model_endpoint):
 
     initial_comment = f"""<@{user_id}>, your artwork is ready.\n{prompt}\n*{oneline_details}*""".strip()
     
-    # FIXME: ignore negative prompt now
-#     np = params.get("negative_prompt", None)
-#     if np:
-#         initial_comment += "\n~" + np + "~"
+    np = params.get("negative_prompt", None)
+    if np:
+        initial_comment += "\n~" + np + "~"
 
 
     file_response = client.files_upload(
